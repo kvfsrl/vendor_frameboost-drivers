@@ -218,6 +218,72 @@ static void init_oplus_task_struct(void *ptr)
 	ots->fbg_depth = -1;
 }
 
+/*
+ * Diagnostic + safety gate.
+ *
+ * task_struct.android_oem_data1 has only 6 slots and is shared with the
+ * platform. If OTS_IDX (or ORQ_IDX) is already owned by another subsystem
+ * on this kernel, get_oplus_task_struct()/get_oplus_rq() would dereference
+ * a foreign pointer and panic the moment a scheduler vendor hook fires.
+ *
+ * Dump the occupancy of every slot and refuse to load when the slot we
+ * picked is busy, so a mismatched index fails gracefully instead of
+ * rebooting the device.
+ */
+static int sa_check_oem_slots(void)
+{
+	struct task_struct *g, *p;
+	unsigned long task_cnt[6] = {0};
+	unsigned long rq_cnt[16] = {0};
+	unsigned long total = 0;
+	u32 cpu;
+	int i;
+	bool bad = false;
+
+	read_lock(&tasklist_lock);
+
+	for_each_process_thread(g, p) {
+		total++;
+		for (i = 0; i < 6; i++) {
+			if (p->android_oem_data1[i])
+				task_cnt[i]++;
+		}
+	}
+
+	for_each_possible_cpu(cpu) {
+		struct rq *rq = cpu_rq(cpu);
+
+		for (i = 0; i < 16; i++) {
+			if (rq->android_oem_data1[i])
+				rq_cnt[i]++;
+		}
+	}
+
+	read_unlock(&tasklist_lock);
+
+	pr_info("oplus_sa: task_oem_slots=%lu,%lu,%lu,%lu,%lu,%lu tasks=%lu\n",
+		task_cnt[0], task_cnt[1], task_cnt[2], task_cnt[3],
+		task_cnt[4], task_cnt[5], total);
+	pr_info("oplus_sa: rq_oem_slots=%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n",
+		rq_cnt[0], rq_cnt[1], rq_cnt[2], rq_cnt[3],
+		rq_cnt[4], rq_cnt[5], rq_cnt[6], rq_cnt[7],
+		rq_cnt[8], rq_cnt[9], rq_cnt[10], rq_cnt[11],
+		rq_cnt[12], rq_cnt[13], rq_cnt[14], rq_cnt[15]);
+
+	if (task_cnt[OTS_IDX]) {
+		pr_err("oplus_sa: OTS_IDX=%d BUSY (%lu tasks), abort load to avoid panic\n",
+			OTS_IDX, task_cnt[OTS_IDX]);
+		bad = true;
+	}
+	if (rq_cnt[ORQ_IDX]) {
+		pr_err("oplus_sa: ORQ_IDX=%d BUSY (%lu rqs), abort load to avoid panic\n",
+			ORQ_IDX, rq_cnt[ORQ_IDX]);
+		bad = true;
+	}
+
+	return bad ? -EINVAL : 0;
+}
+
 static void alloc_ots_mem_for_all_threads(void)
 {
 	struct task_struct *p, *g;
@@ -266,6 +332,12 @@ static void alloc_ots_mem_for_all_threads(void)
 
 int sa_oemdata_init(void)
 {
+	int ret;
+
+	ret = sa_check_oem_slots();
+	if (ret)
+		return ret;
+
 	oplus_task_struct_cachep = kmem_cache_create("oplus_task_struct",
 			sizeof(struct oplus_task_struct), 0,
 			SLAB_PANIC|SLAB_ACCOUNT, init_oplus_task_struct);

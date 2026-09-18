@@ -379,7 +379,13 @@ extern android_rvh_schedule_handler_t fbg_android_rvh_schedule_callback;
 extern struct kmem_cache *oplus_task_struct_cachep;
 
 #define ots_to_ts(ots)	(ots->task)
-#define OTS_IDX			0
+/*
+ * On peridot (Xiaomi GKI) task_struct.android_oem_data1[0] is owned by
+ * Xiaomi's mi_sched (MI_TASK_MAGIC_NUM) and [2] by sched_tune, so keep
+ * Oplus task data in slot 5. rq->android_oem_data1 has 16 slots and no
+ * in-tree user found, so slot 0 is kept for oplus_rq.
+ */
+#define OTS_IDX			5
 #define ORQ_IDX			0
 
 static inline bool test_task_is_fair(struct task_struct *task)
