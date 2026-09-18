@@ -228,11 +228,7 @@ static int register_scheduler_vendor_hooks(void)
 	/* register vendor hook in kernel/signal.c  */
 	REGISTER_TRACE_VH(android_vh_exit_signal, android_vh_exit_signal_handler);
 
-	/* EXPERIMENT: sched_stat_runtime tap disabled - the __traceiter
-	 * for this trace event consistently faults into module space immediately
-	 * after registration on this peridot GKI kernel.
-	 * REGISTER_TRACE_VH(sched_stat_runtime, android_vh_sched_stat_runtime_handler); */
-	pr_info("oplus_sa: sched_stat_runtime handler DISABLED (experiment)\n");
+	REGISTER_TRACE_VH(sched_stat_runtime, android_vh_sched_stat_runtime_handler);
 
 	sa_dbg_tp("sched_stat_runtime(post)", &__tracepoint_sched_stat_runtime);
 
