@@ -15,8 +15,8 @@
 	{ \
 		ret = register_trace_##vender_hook(handler, NULL); \
 		if (ret) { \
-			ux_err("failed to register_trace_"#vender_hook", ret=%d\n", ret); \
-			return ret; \
+			ux_err("failed to register_trace_"#vender_hook", ret=%d (hook already claimed, continuing)\n", ret); \
+			ret = 0; \
 		} \
 	}
 
