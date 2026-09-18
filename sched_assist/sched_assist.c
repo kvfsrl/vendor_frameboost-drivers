@@ -16,6 +16,13 @@
 #include <trace/events/sched.h>
 #include <linux/kprobes.h>
 #include <linux/tracepoint.h>
+#include <linux/delay.h>
+#include <linux/kthread.h>
+#include <linux/ktime.h>
+#include <linux/ptrace.h>
+
+extern void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
+			   const char *loglvl);
 
 #include "sched_assist.h"
 #include "sa_common.h"
@@ -107,6 +114,59 @@ static void sa_dbg_tp(const char *name, struct tracepoint *tp)
 			f[0].func, f[0].data, f[1].func, f[1].data);
 }
 
+static int sa_init_phase;
+static u64 sa_init_wdt_t0;
+static struct task_struct *sa_wdt_thread;
+static struct task_struct *sa_init_task;
+
+static int sa_wdt(void *arg)
+{
+	int last_phase = -1;
+	u64 last_ts = ktime_get_ns();
+
+	while (!kthread_should_stop() && sa_init_phase < 99) {
+		msleep(2000);
+		if (!kthread_should_stop() && sa_init_phase != last_phase) {
+			last_phase = sa_init_phase;
+			last_ts = ktime_get_ns();
+			continue;
+		}
+		if (kthread_should_stop() || sa_init_phase >= 99)
+			break;
+		if ((ktime_get_ns() - last_ts) > 8ULL * NSEC_PER_SEC) {
+			pr_emerg("oplus_sa: sa_wdt: init stalled at phase %d "
+				 "(%llu ms into init), dumping insmod task\n",
+				 sa_init_phase,
+				 (unsigned long long)((ktime_get_ns() - sa_init_wdt_t0) / NSEC_PER_MSEC));
+			if (sa_init_task)
+				dump_backtrace(NULL, sa_init_task, KERN_EMERG);
+			panic("oplus_sa: sched_assist init stall (phase %d)",
+			      sa_init_phase);
+		}
+	}
+	return 0;
+}
+
+static void sa_wdt_start(void)
+{
+	sa_init_phase = 0;
+	sa_init_wdt_t0 = ktime_get_ns();
+	sa_init_task = current;
+	sa_wdt_thread = kthread_run(sa_wdt, NULL, "sa_wdt");
+}
+
+static void sa_wdt_phase(int phase)
+{
+	sa_init_phase = phase;
+}
+
+static void sa_wdt_finish(void)
+{
+	sa_init_phase = 99;
+	if (sa_wdt_thread)
+		kthread_stop(sa_wdt_thread);
+}
+
 static int register_scheduler_vendor_hooks(void)
 {
 	int ret;
@@ -168,7 +228,11 @@ static int register_scheduler_vendor_hooks(void)
 	/* register vendor hook in kernel/signal.c  */
 	REGISTER_TRACE_VH(android_vh_exit_signal, android_vh_exit_signal_handler);
 
-	REGISTER_TRACE_VH(sched_stat_runtime, android_vh_sched_stat_runtime_handler);
+	/* EXPERIMENT: sched_stat_runtime tap disabled - the __traceiter
+	 * for this trace event consistently faults into module space immediately
+	 * after registration on this peridot GKI kernel.
+	 * REGISTER_TRACE_VH(sched_stat_runtime, android_vh_sched_stat_runtime_handler); */
+	pr_info("oplus_sa: sched_stat_runtime handler DISABLED (experiment)\n");
 
 	sa_dbg_tp("sched_stat_runtime(post)", &__tracepoint_sched_stat_runtime);
 
@@ -235,24 +299,39 @@ static int __init oplus_sched_assist_init(void)
 {
 	int ret;
 
+	sa_wdt_start();
+
 	ret = sa_oemdata_init();
-	if (ret != 0)
+	if (ret != 0) {
+		sa_wdt_finish();
 		return ret;
+	}
+	sa_wdt_phase(1);
 
 	sched_assist_init_oplus_rq();
+	sa_wdt_phase(2);
 	update_ux_sched_cputopo();
+	sa_wdt_phase(3);
 #ifdef CONFIG_OPLUS_FEATURE_TICK_GRAN
 	resched_timer_init();
 #endif
+	sa_wdt_phase(4);
 
 	ret = register_scheduler_vendor_hooks();
-	if (ret != 0)
+	if (ret != 0) {
+		sa_wdt_finish();
 		return ret;
+	}
+	sa_wdt_phase(5);
 
 	ret = oplus_sched_assist_proc_init();
-	if (ret != 0)
+	if (ret != 0) {
+		sa_wdt_finish();
 		return ret;
+	}
+	sa_wdt_phase(6);
 	detect_symbol();
+	sa_wdt_phase(7);
 	if (_profile_event_register)
 		/* register a notifier to monitor task exit */
 		(*_profile_event_register)(PROFILE_TASK_EXIT, &process_exit_notifier_block);
@@ -262,6 +341,7 @@ static int __init oplus_sched_assist_init(void)
 #endif
 
 	ux_debug("sched assist init succeed!\n");
+	sa_wdt_finish();
 	return 0;
 }
 
