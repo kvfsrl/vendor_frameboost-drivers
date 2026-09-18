@@ -15,6 +15,7 @@
 #include <trace/hooks/signal.h>
 #include <trace/events/sched.h>
 #include <linux/kprobes.h>
+#include <linux/tracepoint.h>
 
 #include "sched_assist.h"
 #include "sa_common.h"
@@ -91,9 +92,28 @@ void register_wake_up_new_task_ext_handler(wake_up_new_task_handler_t ext_handle
 }
 EXPORT_SYMBOL(register_wake_up_new_task_ext_handler);
 
+extern struct tracepoint __tracepoint_sched_stat_runtime;
+extern struct tracepoint __tracepoint_android_rvh_place_entity;
+extern struct tracepoint __tracepoint_android_rvh_enqueue_entity;
+extern struct tracepoint __tracepoint_android_rvh_wake_up_new_task;
+
+static void sa_dbg_tp(const char *name, struct tracepoint *tp)
+{
+	struct tracepoint_func *f = rcu_dereference_raw(tp->funcs);
+
+	pr_info("oplus_sa: tp %-35s @%px funcs=%px\n", name, tp, f);
+	if (f)
+		pr_info("oplus_sa:   [0] func=%px data=%px | [1] func=%px data=%px\n",
+			f[0].func, f[0].data, f[1].func, f[1].data);
+}
+
 static int register_scheduler_vendor_hooks(void)
 {
 	int ret;
+
+	sa_dbg_tp("place_entity", &__tracepoint_android_rvh_place_entity);
+	sa_dbg_tp("enqueue_entity", &__tracepoint_android_rvh_enqueue_entity);
+	sa_dbg_tp("sched_stat_runtime(pre)", &__tracepoint_sched_stat_runtime);
 
 	/* register vender hook in kernel/sched/fair.c */
 	REGISTER_TRACE_RVH(android_rvh_place_entity, android_rvh_place_entity_handler);
@@ -150,6 +170,9 @@ static int register_scheduler_vendor_hooks(void)
 
 	REGISTER_TRACE_VH(sched_stat_runtime, android_vh_sched_stat_runtime_handler);
 
+	sa_dbg_tp("sched_stat_runtime(post)", &__tracepoint_sched_stat_runtime);
+
+	sa_dbg_tp("wake_up_new_task", &__tracepoint_android_rvh_wake_up_new_task);
 	REGISTER_TRACE_VH(android_rvh_wake_up_new_task, android_rvh_wake_up_new_task_handler);
 
 #ifdef CONFIG_BLOCKIO_UX_OPT
