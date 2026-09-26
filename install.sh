@@ -12,7 +12,7 @@ KVER=$(uname -r)
 [ "$(id -u)" = 0 ] || { echo "need root" >&2; exit 1; }
 
 DIR=$(dirname "$0")
-ORDER="sched-walt oplus_bsp_schedtune oplus_bsp_sched_assist oplus_bsp_eas_opt oplus_bsp_frame_boost oplus_bsp_qos_sched ua_cpu_ioctl oplus_hans"
+ORDER="sched-walt oplus_bsp_schedtune oplus_bsp_sched_assist oplus_bsp_eas_opt oplus_bsp_frame_boost oplus_bsp_qos_sched ua_cpu_ioctl oplus_hans oplus_bsp_zram_opt"
 
 verify() {
   m="$1"
