@@ -16,6 +16,16 @@
  * This module only serves that blob. It performs no scheduling, no cpufreq
  * and no policy work, and has no dependency on sched_assist / frame_boost.
  *
+ * ColorOS opens the afs_config node with write access (O_RDWR) even though it
+ * only ever reads it, so the files must be world-writable or every poll attempt
+ * logs "Failed to open AFS config file" forever:
+ *
+ *   E [OPLUS_AFS_CONFIG]: Failed to open AFS config file:
+ *       /proc/oplus_afs_config/afs_config
+ *
+ * afs_config also accepts a pushed payload and serves it back on read, and
+ * afs_enable stores "1"/"0".
+ *
  * Payload resolution order at load:
  *   1. /system_ext/etc/afsConfig.pb   (the real file, if present)
  *   2. built-in default captured from a working Oplus device
@@ -55,6 +65,7 @@ static const u8 afs_default_payload[] = {
 static u8 afs_buf[AFS_BUF_SIZE];
 static size_t afs_len;
 static bool afs_from_file;
+static bool afs_enabled = true;
 static DEFINE_MUTEX(afs_lock);
 static struct proc_dir_entry *afs_dir;
 
@@ -100,16 +111,37 @@ static int afs_config_open(struct inode *inode, struct file *file)
 	return single_open(file, afs_config_show, NULL);
 }
 
+static ssize_t afs_config_write(struct file *file, const char __user *buf,
+				size_t len, loff_t *ppos)
+{
+	if (len >= AFS_BUF_SIZE)
+		return -EINVAL;
+
+	mutex_lock(&afs_lock);
+	if (copy_from_user(afs_buf, buf, len)) {
+		mutex_unlock(&afs_lock);
+		return -EFAULT;
+	}
+	afs_len = len;
+	afs_from_file = false;
+	mutex_unlock(&afs_lock);
+
+	return len;
+}
+
 static const struct proc_ops afs_config_proc_ops = {
 	.proc_open	= afs_config_open,
 	.proc_read	= seq_read,
+	.proc_write	= afs_config_write,
 	.proc_lseek	= seq_lseek,
 	.proc_release	= single_release,
 };
 
 static int afs_enable_show(struct seq_file *m, void *v)
 {
-	seq_puts(m, "1\n");
+	mutex_lock(&afs_lock);
+	seq_printf(m, "%d\n", afs_enabled ? 1 : 0);
+	mutex_unlock(&afs_lock);
 	return 0;
 }
 
@@ -118,9 +150,40 @@ static int afs_enable_open(struct inode *inode, struct file *file)
 	return single_open(file, afs_enable_show, NULL);
 }
 
+static ssize_t afs_enable_write(struct file *file, const char __user *buf,
+				size_t len, loff_t *ppos)
+{
+	char c;
+	bool en;
+
+	if (len == 0)
+		return 0;
+
+	if (copy_from_user(&c, buf, 1))
+		return -EFAULT;
+
+	switch (c) {
+	case '0':
+		en = false;
+		break;
+	case '1':
+		en = true;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	mutex_lock(&afs_lock);
+	afs_enabled = en;
+	mutex_unlock(&afs_lock);
+
+	return len;
+}
+
 static const struct proc_ops afs_enable_proc_ops = {
 	.proc_open	= afs_enable_open,
 	.proc_read	= seq_read,
+	.proc_write	= afs_enable_write,
 	.proc_lseek	= seq_lseek,
 	.proc_release	= single_release,
 };
@@ -135,13 +198,13 @@ static int __init oplus_afs_config_init(void)
 		return -ENOMEM;
 	}
 
-	if (!proc_create(AFS_PROC_CONFIG, 0444, afs_dir, &afs_config_proc_ops)) {
+	if (!proc_create(AFS_PROC_CONFIG, 0666, afs_dir, &afs_config_proc_ops)) {
 		pr_err("oplus_afs_config: create %s failed\n", AFS_PROC_CONFIG);
 		proc_remove(afs_dir);
 		return -ENOMEM;
 	}
 
-	if (!proc_create(AFS_PROC_ENABLE, 0444, afs_dir, &afs_enable_proc_ops)) {
+	if (!proc_create(AFS_PROC_ENABLE, 0666, afs_dir, &afs_enable_proc_ops)) {
 		pr_err("oplus_afs_config: create %s failed\n", AFS_PROC_ENABLE);
 		proc_remove(afs_dir);
 		return -ENOMEM;
@@ -166,4 +229,4 @@ module_exit(oplus_afs_config_exit);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("OPLUS AFS config proc nodes");
 MODULE_AUTHOR("hoshikv");
-MODULE_VERSION("1.0");
+MODULE_VERSION("2.0");
